@@ -8,8 +8,8 @@
 #define NEOPIXEL_PIN 4
 
 //cadencia por sensor en segundos
-#define ambPeriod 3
-#define soilPeriod 3
+#define ambPeriod 5
+#define soilPeriod 5
 
 //Period of data uploading
 #define DEFAULT_PERIOD 60      //Arround 5min

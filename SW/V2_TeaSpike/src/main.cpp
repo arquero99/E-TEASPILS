@@ -200,22 +200,21 @@ void loop()
 
 void initRing()
 {
-
+  Serial.println("Inicializando Stripe");
   pixels.begin(); // INITIALIZE NeoPixel strip object (REQUIRED)
-  pixels.clear();
   theaterChaseRainbow(50);
-
-  pixel.begin();
-  pixel.clear();
-  pixel.setPixelColor(0, pixel.Color(0, 0, 0));
-  pixel.show();
+  pixels.clear();
 
   if ((int)pixels.numPixels() == 8)
   {
     eLEDSTRIPE = false;
+    Serial.println("Stripe con 8 LEDS");
   }
-  pixels.clear();
-  pixel.clear();
+  else{
+    int leds=pixels.numPixels();
+    Serial.println("Stripe defectuoso ");
+    Serial.print(leds);
+  }
 }
 
 void theaterChaseRainbow(int wait)
