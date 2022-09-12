@@ -43,6 +43,14 @@ SW/V1_TeaSpike/.vscode/c_cpp_properties.json
 SW/V1_TeaSpike/.vscode/launch.json
 SW/V1_TeaSpike/.vscode/ipch
 SW/V1_TeaSpike/.vscode/extensions.json
+
+SW/V2_TeaSpike/.pio
+SW/V2_TeaSpike/.vscode/.browse.c_cpp.db*
+SW/V2_TeaSpike/.vscode/c_cpp_properties.json
+SW/V2_TeaSpike/.vscode/launch.json
+SW/V2_TeaSpike/.vscode/ipch
+SW/V2_TeaSpike/.vscode/extensions.json
+
 SW/V0/librerias.zip
 
 #Manual in Word

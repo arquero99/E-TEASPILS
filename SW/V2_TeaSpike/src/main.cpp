@@ -1,6 +1,6 @@
 #include <Arduino.h>
-#include <credentials.h>
-#include <configuration.h>
+#include "credentials.h"
+#include "configuration.h"
 #include <Wire.h>
 #include <SparkFun_SCD30_Arduino_Library.h>
 #include "ThingsBoard.h"
@@ -16,25 +16,21 @@
 #include <OneWire.h>
 #include <DallasTemperature.h>
 
-//Error Flags
-bool eLEDSTRIPE=true;
-bool eDISPLAY=true;
-bool eSCD30=true;
-bool eDS18B20=true;
-bool eVEML7700=true;
-bool eRTC=true;
-bool eWIFI=true;
-bool eTB=true;
-
+// Error Flags
+bool eLEDSTRIPE = true;
+bool eDISPLAY = true;
+bool eSCD30 = true;
+bool eDS18B20 = true;
+bool eVEML7700 = true;
+bool eRTC = true;
+bool eWIFI = true;
+bool eTB = true;
+bool eTG = true;
+bool eSD = true;
 
 // thingsboard
-#define TOKEN tokenDevice
-#define THINGSBOARD_SERVER thingsboardServer
-#define TOKEN_UPF tokenDevice_UPF
-#define THINGSBOARD_SERVER_UPF thingsboardServer_UPF
 WiFiClient espClient;
 ThingsBoard tb(espClient);
-ThingsBoard tbUPF(espClient);
 int status = WL_IDLE_STATUS;
 
 // telegram
@@ -46,10 +42,13 @@ unsigned long bot_lasttime; // last time messages' scan has been done
 
 // real time clock
 RTC_DS3231 rtc;
+const char *ntpServer = "pool.ntp.org";
 
 // SD
 File logData;
 int hora = 0;
+String path;
+String file_number;
 
 // SCD30 Sensor. CO2
 SCD30 airSensor;
@@ -66,9 +65,9 @@ Adafruit_NeoPixel pixel(1, NEOPIXEL_PIN, NEO_GRB + NEO_KHZ800);
 
 // LED_RING
 Adafruit_NeoPixel pixels(NUMPIXELS, RING_PIN, NEO_GRB + NEO_KHZ800);
-int ringElement = 1;
+int ringElement = 2;
 int colorLow[] = {0, 240, 255};
-int colorMedium[] = {0, 255, 121};
+int colorMedium[] = {0, 255, 0};
 int colorLarge[] = {255, 195, 0};
 int colorHigh[] = {255, 0, 0};
 
@@ -88,6 +87,7 @@ int tempValue = 0;
 int humidityValue = 0;
 int soilHumidityValue = 0;
 int soilTemperatureValue = 0;
+int soilTemperatureValue2 = 0;
 
 int presentMoment = 0;
 int displayMode = 1;
@@ -103,7 +103,7 @@ void checkSD();
 void writeFile(fs::FS &fs, const char *path, const char *message);
 void appendFile(fs::FS &fs, const char *path, const char *message);
 String completeDate(int mode);
-void conectIOT();
+bool init_IoT();
 void sensorsRead();
 void displayCarousel();
 void displayAll();
@@ -118,23 +118,42 @@ void RING_CO2();
 void RING_TEMP();
 void RING_HUM();
 void RING_SOILHUM();
-void RING_SOILTEM();
+void RING_SOILTEM1();
+void RING_SOILTEM2();
 void noInternetMsg();
 void firstRead();
+void theaterChaseRainbow(int wait);
+void updateTime();
+void init_tb();
+void init_tg();
+bool init_WIFI();
+void internetMsg();
+
 
 void setup()
 {
   Serial.begin(BAUD_RATE);
+
   initRing();
   initDisplay();
-
-  delay(2000);
+  initClock();
+  if (init_IoT()) // Se conecta a WIFI y la plataforma IoT
+  {
+    updateTime();
+  }
 
   checkSD(); // Se comprueba si hay microSD evitando continuar hasta que no se inserte. Espera Activa
-
-  writeFile(SD, "/log.txt", LogInitialMessage.c_str());
-
-  conectIOT(); // Se conecta a WIFI y la plataforma IoT
+  if (!eSD)
+  {
+    char format[] = "MM-DD-YYYY-hh-mm";
+    file_number = rtc.now().toString(format);
+    path = "/log_";
+    path.concat(file_number);
+    path.concat(".csv");
+    writeFile(SD, path.c_str(), LogInitialMessage.c_str());
+    Serial.println("Escribiendo datos en SD en ruta: ");
+    Serial.print(path);
+  }
 
   initCo2();
 
@@ -142,17 +161,15 @@ void setup()
 
   initLight();
 
-  initClock();
-
   firstRead();
 }
 
 void loop()
 {
   checkSD();
-  if (WiFi.status() != WL_CONNECTED || !tb.connected() || !tbUPF.connected())
+  if (WiFi.status() != WL_CONNECTED || !tb.connected())
   {
-    conectIOT();
+    init_IoT();
   }
 
   checkBot();
@@ -186,65 +203,123 @@ void initRing()
 
   pixels.begin(); // INITIALIZE NeoPixel strip object (REQUIRED)
   pixels.clear();
+  theaterChaseRainbow(50);
 
   pixel.begin();
   pixel.clear();
-
   pixel.setPixelColor(0, pixel.Color(0, 0, 0));
   pixel.show();
 
-    if ((int)pixels.getPixels()==12)
+  if ((int)pixels.numPixels() == 8)
   {
-    eLEDSTRIPE=false;
+    eLEDSTRIPE = false;
   }
+  pixels.clear();
+  pixel.clear();
+}
 
+void theaterChaseRainbow(int wait)
+{
+  int firstPixelHue = 0; // First pixel starts at red (hue 0)
+  for (int a = 0; a < 15; a++)
+  { // Repeat 30 times...
+    for (int b = 0; b < 3; b++)
+    {                 //  'b' counts from 0 to 2...
+      pixels.clear(); //   Set all pixels in RAM to 0 (off)
+      for (int c = b; c < pixels.numPixels(); c += 3)
+      {
+        int hue = firstPixelHue + c * 65536L / pixels.numPixels();
+        uint32_t color = pixels.gamma32(pixels.ColorHSV(hue)); // hue -> RGB
+        pixels.setPixelColor(c, color);                        // Set pixel 'c' to value 'color'
+      }
+      pixels.show();
+      delay(wait);
+      firstPixelHue += 65536 / 90; // One cycle of color wheel over 90 frames
+    }
+  }
 }
 
 void initDisplay()
 {
-  //Check Display Connection 
-  Wire.beginTransmission(60);
-  int error = Wire.endTransmission();
-  if (error==0)
+  bool check = CHECK_OLED;
+  if (check)
   {
-    eDISPLAY=false;
+    Serial.println("inicialización de oled ");
+    int i = 0;
+    Wire.beginTransmission(60);
+    int error = Wire.endTransmission();
+    if (error == 0)
+    {
+      eDISPLAY = false;
+    }
+    else
+    {
+      while (i < 10 && error != 0)
+      {
+        display.begin(SH1106_SWITCHCAPVCC, 0x3C);
+        Wire.beginTransmission(60);
+        error = Wire.endTransmission();
+        delay(100);
+        Serial.println("Inicializando OLED");
+        Serial.println(error);
+        i++;
+      }
+      if (error != 0)
+        eDISPLAY = true;
+      else
+        eDISPLAY = false;
+    }
+    if (!eDISPLAY)
+    {
+      display.clearDisplay();
+      display.setTextSize(1);
+      display.setTextColor(WHITE);
+    }
   }
-
-  display.begin(SH1106_SWITCHCAPVCC, 0x3C);
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(WHITE);
+  else
+  {
+    display.begin(SH1106_SWITCHCAPVCC, 0x3C);
+    Serial.println("Inicializando OLED");
+    eDISPLAY = false;
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(WHITE);
+  }
+  Serial.println("mensaje de bienvenida");
   display.setCursor(45, 24);
   display.println("Starting");
   display.setCursor(25, 32);
-  display.println("TEASPILS system");
+  display.println("Teaspils system");
   display.display();
-  delay(2000);
-
-  // miniature bitmap display
+  delay(1000);
   display.clearDisplay();
-  display.drawBitmap(0, 0, Logo, 128, 64, 1);
+  delay(200);
+  display.drawBitmap(0, 0, LOGO, 128, 64, WHITE);
   display.display();
   delay(3000);
+  pixel.clear();
+  display.clearDisplay();
 }
 
 void initCo2()
 {
+  Serial.println("Inicializacion SCD30");
   Wire.begin();
   if (airSensor.begin() == false)
   {
     display.clearDisplay();
     display.setCursor(45, 24);
-    display.println(" No se ha ");
-    display.setCursor(45, 32);
-    display.println(" detectado");
+    // display.println(" No se ha ");
+    display.setCursor(35, 32);
+    display.println("Loading ...");
     display.setCursor(45, 40);
-    display.println("   SCD30  ");
+    // display.println("   SCD30  ");
     display.display();
     delay(3000);
   }
-  else{
-    eSCD30=false;
+  else
+  {
+    eSCD30 = false;
   }
 }
 
@@ -265,13 +340,15 @@ void initSoilTemp()
     delay(3000);
     display.clearDisplay();
   }
-  else{
-    eDS18B20=false;
+  else
+  {
+    eDS18B20 = false;
   }
 }
 
 void initLight()
 {
+  Serial.println("Inicializacion VEML");
   if (veml.begin() == false)
   {
     display.clearDisplay();
@@ -283,8 +360,9 @@ void initLight()
     delay(3000);
     display.clearDisplay();
   }
-  else{
-    eVEML7700=false;
+  else
+  {
+    eVEML7700 = false;
   }
   veml.setGain(VEML7700_GAIN_1);
   veml.setIntegrationTime(VEML7700_IT_800MS);
@@ -303,12 +381,15 @@ void initClock()
     display.setCursor(45, 40);
     display.println("RTC Clock");
     display.display();
+    eRTC = true;
     delay(3000);
     display.clearDisplay();
   }
-  else{
-    eRTC=false;
+  else
+  {
+    eRTC = false;
   }
+  /*
   // Si se ha perdido la corriente, fijar fecha y hora
   if (rtc.lostPower())
   {
@@ -317,10 +398,74 @@ void initClock()
     // Fijar a fecha y hora específica. En el ejemplo, 21 de Enero de 2016 a las 03:00:00
     // rtc.adjust(DateTime(2016, 1, 21, 3, 0, 0));
   }
+  */
+}
+
+void updateTime()
+{
+  configTime(GMT_OFFSET, GMT_DST, ntpServer);
+  DateTime newDate;
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo))
+  {
+    Serial.println("Fallo al obtener la hora");
+    return;
+  }
+  else
+  {
+    rtc.adjust(DateTime(timeinfo.tm_year, timeinfo.tm_mon, timeinfo.tm_mday, timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec));
+    Serial.println("Actualizada a la hora NTP: ");
+    Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
+
+    newDate = rtc.now();
+    Serial.println("Hora en reloj: ");
+    Serial.print("Date : ");
+    Serial.print(newDate.day());
+    Serial.print("/");
+    Serial.print(newDate.month());
+    Serial.print("/");
+    Serial.print(newDate.year());
+    Serial.print("\t Hour : ");
+    Serial.print(newDate.hour());
+    Serial.print(":");
+    Serial.print(newDate.minute());
+    Serial.print(".");
+    Serial.println(newDate.second());
+  }
 }
 
 void checkSD()
 {
+  Serial.println("inicialización de SD ");
+  int i = 0;
+  SD.end();
+  while (!SD.begin() && i < 10)
+  {
+    Serial.println("SD NO ENCONTRADA");
+    delay(500);
+    i++;
+  }
+  if (i >= 10)
+  {
+    eSD = true;
+    Serial.println("SD NO ENCONTRADA");
+    pixel.setPixelColor(0, pixel.Color(255, 0, 0));
+    display.clearDisplay();
+    display.setCursor(0, 10);
+    display.println("SD card not found");
+    display.setCursor(0, 40);
+    display.println("Please, insert a SD  card");
+    pixel.show();
+    display.display();
+    delay(2000);
+    pixel.clear();
+  }
+  else
+  {
+    eSD = false;
+    Serial.println("SD ENCONTRADA");
+  }
+  /*
   SD.end();
   while (!SD.begin(5))
   {
@@ -330,7 +475,8 @@ void checkSD()
     display.setCursor(0, 40);
     display.println("Please, insert a SD  card");
     display.display();
-    pixel.setPixelColor(0, pixel.Color(255, 102, 204));
+    //pixel.setPixelColor(0, pixel.Color(255, 102, 204));
+    pixel.setPixelColor(0, pixel.Color(255, 0, 0));
     pixel.show();
     delay(500);
     pixel.clear();
@@ -338,6 +484,7 @@ void checkSD()
 
   }
   // sdActiva = true;
+  */
 }
 
 // Writes data into SD card and prints a log on Serial console
@@ -397,49 +544,71 @@ String completeDate(int mode)
   return formattedDate;
 }
 
-void conectIOT()
+bool init_IoT()
 {
-  WiFi.begin(WIFI_NAME, WIFI_PASSWORD);
-  if (WiFi.status() != WL_CONNECTED)
+  bool conection = false;
+  Serial.println("inicialización de IoT ");
+  if (init_WIFI())
   {
-
-    for (int i = 0; i < 10 && WiFi.status() != WL_CONNECTED; i++)
-    {
-      delay(750);
-    }
-
-    pixel.setPixelColor(0, pixel.Color(255, 0, 0));
-    pixel.show();
-    if (WiFi.status() != WL_CONNECTED)
-      noInternetMsg();
-
-    int i = 0;
-    while (i < 5 && WiFi.status() != WL_CONNECTED)
-    {
-      i++;
-      delay(1000);
-    }
+    init_tb();
+    init_tg();
+    conection = true;
   }
   else
   {
-    eWIFI=false;
-    secured_client.setCACert(TELEGRAM_CERTIFICATE_ROOT); // Add root certificate for api.telegram.org
-    if (!tb.connected() || !tbUPF.connected())
+    noInternetMsg();
+    eTB = true;
+    eTG = true;
+  }
+  return conection;
+}
+
+bool init_WIFI()
+{
+  Serial.println("Conexion de wifi");
+  WiFi.begin(WIFI_NAME, WIFI_PASSWORD);
+  if (WiFi.status() != WL_CONNECTED)
+  {
+    Serial.println("Connecting to WIFI");
+    for (int i = 0; i < 80 && WiFi.status() != WL_CONNECTED; i++)
     {
-      if (!tb.connect(THINGSBOARD_SERVER, TOKEN) || !tbUPF.connect(THINGSBOARD_SERVER_UPF,TOKEN_UPF))
-      {
-        pixel.setPixelColor(0, pixel.Color(204, 51, 255));
-        pixel.show();
-        Serial.println("Connection to tb failed");
-      }
-      else
-      {
-        eTB=false;
-        pixel.setPixelColor(0, pixel.Color(0, 255, 0));
-        pixel.show();
-        Serial.println("Connection to tb done");
-      }
+      delay(750);
+      Serial.print(".");
     }
+    if (WiFi.status() != WL_CONNECTED)
+    {
+      eWIFI = true;
+    }
+    else
+    {
+      eWIFI = false;
+      internetMsg();
+    }
+  }
+  else
+    eWIFI = false;
+  return !eWIFI;
+}
+
+void init_tg()
+{
+  Serial.println("inicialización de telegram ");
+  secured_client.setCACert(TELEGRAM_CERTIFICATE_ROOT);
+  // Add root certificate for api.telegram.org
+}
+
+void init_tb()
+{
+  Serial.println("inicialización de thingsboard ");
+  if (!tb.connect(THINGSBOARD_SERVER, TOKEN))
+  {
+    eTB = true;
+    Serial.println("Connection to tb failed");
+  }
+  else
+  {
+    eTB = false;
+    Serial.println("Connection to tb done");
   }
 }
 
@@ -459,7 +628,11 @@ void sensorsRead()
     soilTemperatureSensor.requestTemperatures();
     soilHumidityValue = analogRead(SOILHUMIDITY_SENSOR_PIN);
     soilTemperatureValue = static_cast<int>(round(soilTemperatureSensor.getTempCByIndex(0)));
-
+    soilTemperatureValue2 = static_cast<int>(round(soilTemperatureSensor.getTempCByIndex(1)));
+    Serial.print("Valor sonda 1: ");
+    Serial.println(soilTemperatureValue);
+    Serial.print("Valor sonda 2: ");
+    Serial.println(soilTemperatureValue2);
     soilCont = 0;
   }
 }
@@ -535,8 +708,8 @@ void displayAll()
   String istem = "";
   String ishum = "";
   String islig = "";
-  String issoil = "";
-  String isloud = "";
+  String issoil1 = "";
+  String issoil2 = "";
 
   switch (ringElement)
   {
@@ -553,10 +726,10 @@ void displayAll()
     ishum = "*";
     break;
   case 5:
-    issoil = "*";
+    issoil1 = "*";
     break;
   case 6:
-    isloud = "*";
+    issoil2 = "*";
     break;
   }
 
@@ -583,14 +756,14 @@ void displayAll()
   display.print(lightValue);
 
   display.setCursor(0, 40);
-  display.print("Soil Temp:" + isloud);
+  display.print("Soil Temp 1:" + issoil1);
   display.setCursor(100, 40);
   display.print(soilTemperatureValue);
 
   display.setCursor(0, 50);
-  display.print("Soil Humidity:" + issoil);
+  display.print("Soil Temp 2:" + issoil2);
   display.setCursor(100, 50);
-  display.print(soilHumidityValue);
+  display.print(soilTemperatureValue2);
 
   display.display();
 }
@@ -676,13 +849,15 @@ void fixSensor(int sensor)
 
 void logDataset()
 {
-  String writeLog = "\n" + completeDate(1) + ";" + CO2Value + ";" + humidityValue + ";" + lightValue + ";" + soilHumidityValue + ";" + soilTemperatureValue + ";" + tempValue + ";";
+  String writeLog = "\n" + completeDate(1) + ";" + CO2Value + ";" + humidityValue + ";" + tempValue + ";" + lightValue + ";" + soilTemperatureValue + ";" + soilTemperatureValue2;
 
   if (!eLEDSTRIPE && !eDISPLAY && !eSCD30 && !eDS18B20 && !eVEML7700 && !eRTC && !eWIFI && !eTB)
   {
-    writeLog.concat("0 ");
+    writeLog.concat(";0");
   }
-  else{
+  else
+  {
+    writeLog.concat(";");
     if (eLEDSTRIPE)
     {
       writeLog.concat("101 ");
@@ -716,7 +891,7 @@ void logDataset()
       writeLog.concat("201 ");
     }
   }
-  appendFile(SD, "/log.txt", writeLog.c_str());
+  appendFile(SD, path.c_str(), writeLog.c_str());
 }
 
 void uploadData()
@@ -726,15 +901,15 @@ void uploadData()
   tb.sendTelemetryInt("temperature", tempValue);
   tb.sendTelemetryInt("humidity", humidityValue);
   tb.sendTelemetryInt("light", lightValue);
-  tb.sendTelemetryInt("soilTemp", soilTemperatureValue);
-  tb.sendTelemetryInt("soilHumidity", soilHumidityValue);
+  tb.sendTelemetryInt("soilTemp1", soilTemperatureValue);
+  tb.sendTelemetryInt("soilTemp2", soilTemperatureValue2);
 
-  tbUPF.sendTelemetryInt("co2", CO2Value);
-  tbUPF.sendTelemetryInt("temperature", tempValue);
-  tbUPF.sendTelemetryInt("humidity", humidityValue);
-  tbUPF.sendTelemetryInt("light", lightValue);
-  tbUPF.sendTelemetryInt("soilTemp", soilTemperatureValue);
-  tbUPF.sendTelemetryInt("soilHumidity", soilHumidityValue);
+  //  tbUPF.sendTelemetryInt("co2", CO2Value);
+  //  tbUPF.sendTelemetryInt("temperature", tempValue);
+  //  tbUPF.sendTelemetryInt("humidity", humidityValue);
+  //  tbUPF.sendTelemetryInt("light", lightValue);
+  //  tbUPF.sendTelemetryInt("soilTemp", soilTemperatureValue);
+  //  tbUPF.sendTelemetryInt("soilHumidity", soilHumidityValue);
 }
 
 void checkBot()
@@ -802,133 +977,134 @@ void handleNewMessages(int numNewMessages)
     if (from_name == "")
       from_name = "Guest";
 
-    if (text == "/carousel")
+    /*if (text == "/carousel")
     {
       displayMode = 3;
       bot.sendMessage(chat_id, "Carousel mode", "");
-    }
+    }*/
 
-    if (text == "/all")
+    /*if (text == "/all")
     {
       displayMode = 1;
       bot.sendMessage(chat_id, "Screen showing all", "");
-    }
+    }*/
 
-    if (text == "/ringLight")
+    if (text == "/setlightbar")
     {
       ringElement = 1;
-      bot.sendMessage(chat_id, "Ring show now the light", "");
+      bot.sendMessage(chat_id, "Bar shows light gradient", "");
     }
 
-    if (text == "/ringCO2")
+    if (text == "/setco2bar")
     {
       ringElement = 2;
-      bot.sendMessage(chat_id, "Ring show now the co2", "");
+      bot.sendMessage(chat_id, "Bar shows co2 gradient", "");
     }
 
-    if (text == "/ringTemperature")
+    if (text == "/settempbar")
     {
       ringElement = 3;
-      bot.sendMessage(chat_id, "Ring show now the temperature", "");
+      bot.sendMessage(chat_id, "Bar shows temperature gradient", "");
     }
 
-    if (text == "/ringHumidity")
+    if (text == "/sethumiditybar")
     {
       ringElement = 4;
-      bot.sendMessage(chat_id, "Ring show now the humidity", "");
+      bot.sendMessage(chat_id, "Bar shows humidity gradient", "");
     }
 
-    if (text == "/ringSoilHumidity")
+    if (text == "/ringsoiltemp1bar")
     {
       ringElement = 5;
-      bot.sendMessage(chat_id, "Ring show now the soil humidity", "");
+      bot.sendMessage(chat_id, "Bar shows soil temperature 1 gradient", "");
     }
 
-    if (text == "/ringSoilTemperature")
+    if (text == "/setsoiltemp2bar")
     {
       ringElement = 6;
-      bot.sendMessage(chat_id, "Ring show now the soil temperature", "");
+      bot.sendMessage(chat_id, "Bar shows soil temperature 2 gradient", "");
     }
 
-    if (text == "/setLight")
+    /*if (text == "/setlightbar")
     {
       displayMode = 2;
       fixedSensor = 1;
       bot.sendMessage(chat_id, "Display show now the light", "");
     }
 
-    if (text == "/setCO2")
+    if (text == "/setco2bar")
     {
       displayMode = 2;
       fixedSensor = 2;
       bot.sendMessage(chat_id, "Display show now the co2", "");
     }
 
-    if (text == "/setTemperature")
+    if (text == "/settempbar")
     {
       displayMode = 2;
       fixedSensor = 3;
       bot.sendMessage(chat_id, "Display show now the temperature", "");
     }
 
-    if (text == "/setHumidity")
+    if (text == "/sethumiditybar")
     {
       displayMode = 2;
       fixedSensor = 4;
       bot.sendMessage(chat_id, "Display show now the humidity", "");
     }
 
-    if (text == "/setSoilHumidity")
+    if (text == "/setsoiltemp1bar")
     {
       displayMode = 2;
       fixedSensor = 5;
-      bot.sendMessage(chat_id, "Display show now the soil humidity", "");
+      bot.sendMessage(chat_id, "Display show now the soil temperature 1", "");
     }
 
-    if (text == "/setSoilTemperature")
+    if (text == "/setsoiltemp2bar")
     {
       displayMode = 2;
       fixedSensor = 6;
-      bot.sendMessage(chat_id, "Display show now the soil temperature", "");
-    }
+      bot.sendMessage(chat_id, "Display show now the soil temperature 2", "");
+    }*/
 
-    if (text == "/getLight")
+    if (text == "/light")
     {
       String message = "Light: " + (String)lightValue;
       bot.sendMessage(chat_id, message, "");
     }
-    if (text == "/getCO2")
+    if (text == "/co2")
     {
       String message = "CO2: " + (String)CO2Value;
       bot.sendMessage(chat_id, message, "");
     }
-    if (text == "/getTemperature")
+    if (text == "/temp")
     {
       String message = "Temperature: " + (String)tempValue;
       bot.sendMessage(chat_id, message, "");
     }
-    if (text == "/getHumidity")
+    if (text == "/humidity")
     {
       String message = "Humidity: " + (String)humidityValue;
       bot.sendMessage(chat_id, message, "");
     }
-    if (text == "/getSoilHumidity")
+    if (text == "/soiltemp1")
     {
-      String message = "Soil Humidity: " + (String)soilHumidityValue;
+      String message = "Soil Temperature Probe 1: " + (String)soilTemperatureValue;
       bot.sendMessage(chat_id, message, "");
     }
-    if (text == "/getSoilTemperature")
+    if (text == "/soiltemp2")
     {
-      String message = "Soil Temperature: " + (String)soilTemperatureValue;
+      String message = "Soil Temperature Probe 2: " + (String)soilTemperatureValue2;
       bot.sendMessage(chat_id, message, "");
     }
-    if (text == "/setPeriod")
+    if (text == "/changecadence")
     {
       sendPeriod = param1.toInt();
       String message = "Period of data uploading setted to " + (String)sendPeriod + " secs";
       bot.sendMessage(chat_id, message, "");
     }
-    if (text == "SetColorLow")
+
+    /*if (text == "SetColorLow")
     {
       colorLow[0] = param1.toInt();
       colorLow[1] = param2.toInt();
@@ -958,41 +1134,41 @@ void handleNewMessages(int numNewMessages)
       colorHigh[1] = param2.toInt();
       colorHigh[2] = param3.toInt();
       bot.sendMessage(chat_id, "Updated the VERY HIGH color", "");
-    }
-    if (text == "/COLOR")
+    }*/
+    /*if (text == "/COLOR")
     {
       String aux = (String)colorLow[0] + " " + (String)colorLow[1] + " " + (String)colorLow[2];
       bot.sendMessage(chat_id, aux, "");
-    }
+    }*/
     if (text == "/start")
     {
-      String welcome = "Bienvenido a la configuracion del sistema TEASPILS, " + from_name + ".\n";
-      welcome += "/carousel : Show one by one\n";
-      welcome += "/all : Show all\n";
-      welcome += "/ringLight : Show light value in the ring\n";
-      welcome += "/ringCO2 : Show CO2 value in the ring\n";
-      welcome += "/ringTemperature : Show temperature value in the ring\n";
-      welcome += "/ringHumidity : Show humidity value in the ring\n";
-      welcome += "/ringSoilHumidity : Show soil humidity value in the ring\n";
-      welcome += "/ringSoilTemperature : Show soil temperature value in the ring\n";
-      welcome += "/getLight : actual light value\n";
-      welcome += "/getCO2 : actual CO2 value\n";
-      welcome += "/getTemperature : actual temperature value\n";
-      welcome += "/getHumidity : actual humidity value\n";
-      welcome += "/getSoilHumidity : actual soil humidity value\n";
-      welcome += "/getSoilTemperature : actual soil temperature value\n";
-      welcome += "/setLight : set light value in display\n";
-      welcome += "/setCO2 : set CO2 value in display\n";
-      welcome += "/setTemperature : set temperature value in display\n";
-      welcome += "/setHumidity : set humidity value in display\n";
-      welcome += "/setSoilHumidity : set soil humidity value in display\n";
-      welcome += "/setSoilTemperature : set soil temperature value in display\n";
-      welcome += "/setPeriod : set the period of data uploading in seconds\n";
-      welcome += "how to use the following commands\n --> command 255 255 255\n";
+      String welcome = "Welcome to TEASPILS chatbot, " + from_name + ".\n";
+      // welcome += "/carousel : Show one by one\n";
+      // welcome += "/all : Show all\n";
+      welcome += "/setlightbar : Show light value in the bar\n";
+      welcome += "/setco2bar : Show CO2 value in the bar\n";
+      welcome += "/settempbar : Show temperature value in the bar\n";
+      welcome += "/sethumiditybar : Show humidity value in the bar\n";
+      welcome += "/setsoiltemp1bar : Show soil temperature probe 1 value in the bar\n";
+      welcome += "/setsoiltemp2bar : Show soil temperature probe 2 value in the bar\n";
+      welcome += "/light : Current light in lux\n";
+      welcome += "/co2 : Current CO2 in ppm\n";
+      welcome += "/temp : Current Celsius in degrees\n";
+      welcome += "/humidity : Current humidity in percentage\n";
+      welcome += "/soiltemp1 : Current soil temperature probe 1 in degrees\n";
+      welcome += "/soiltemp2 : Current soil temperature probe 2 in degrees\n";
+      // welcome += "/setlight : set light value in display\n";
+      // welcome += "/setco2 : set CO2 value in display\n";
+      // welcome += "/settemperature : set temperature value in display\n";
+      // welcome += "/sethumidity : set humidity value in display\n";
+      // welcome += "/setsoilHumidity : set soil humidity value in display\n";
+      // welcome += "/setsoilTemperature : set soil temperature value in display\n";
+      welcome += "/changecadence : Set sensor data reading frequency in seconds\n";
+      /*welcome += "how to use the following commands\n --> command 255 255 255\n";
       welcome += "SetColorLow R G B : new color for low values\n";
       welcome += "SetColorMedium R G B : new color for medium values\n";
       welcome += "SetColorLarge R G B : new color for large values\n";
-      welcome += "SetColorHigh R G B : new color for very high values\n";
+      welcome += "SetColorHigh R G B : new color for very high values\n";*/
       bot.sendMessage(chat_id, welcome, "Markdown");
     }
   }
@@ -1001,6 +1177,7 @@ void handleNewMessages(int numNewMessages)
 void ring(int sensor)
 {
   pixels.clear();
+  pixels.show();
   switch (sensor)
   {
   case 1:
@@ -1016,10 +1193,10 @@ void ring(int sensor)
     RING_HUM();
     break;
   case 5:
-    RING_SOILHUM();
+    RING_SOILTEM1();
     break;
   case 6:
-    RING_SOILTEM();
+    RING_SOILTEM2();
     break;
   }
 }
@@ -1028,23 +1205,22 @@ void RING_LIGHT()
 {
   if (lightValue > 300)
   {
-    for (int i = 0; i < NUMPIXELS; i++)
+    for (int i = NUMPIXELS - 7; i >= 0; i--)
       pixels.setPixelColor(i, pixels.Color(colorLow[0], colorLow[1], colorLow[2]));
   }
   else if (lightValue > 200)
   {
-    for (int i = 0; i < NUMPIXELS-3; i++)
+    for (int i = NUMPIXELS - 5; i >= 0; i--)
       pixels.setPixelColor(i, pixels.Color(colorMedium[0], colorMedium[1], colorMedium[2]));
-    
   }
   else if (lightValue > 100)
   {
-    for (int i = 0; i < NUMPIXELS-6; i++)
+    for (int i = NUMPIXELS - 3; i >= 0; i--)
       pixels.setPixelColor(i, pixels.Color(colorLarge[0], colorLarge[1], colorLarge[2]));
   }
   else
   {
-    for (int i = 0; i < NUMPIXELS-9; i++)
+    for (int i = NUMPIXELS; i >= 0; i--)
       pixels.setPixelColor(i, pixels.Color(colorHigh[0], colorHigh[1], colorHigh[2]));
   }
   pixels.show();
@@ -1052,24 +1228,24 @@ void RING_LIGHT()
 
 void RING_CO2()
 {
-  if (CO2Value > 800)
+  if (CO2Value > 1000)
   {
-    for (int i = 0; i < NUMPIXELS; i++)
+    for (int i = NUMPIXELS; i >= 0; i--)
       pixels.setPixelColor(i, pixels.Color(colorHigh[0], colorHigh[1], colorHigh[2]));
   }
   else if (CO2Value > 600)
   {
-    for (int i = 0; i < NUMPIXELS - 3; i++)
+    for (int i = NUMPIXELS - 3; i >= 0; i--)
       pixels.setPixelColor(i, pixels.Color(colorLarge[0], colorLarge[1], colorLarge[2]));
   }
   else if (CO2Value > 400)
   {
-    for (int i = 0; i < NUMPIXELS - 6; i++)
+    for (int i = NUMPIXELS - 5; i >= 0; i--)
       pixels.setPixelColor(i, pixels.Color(colorMedium[0], colorMedium[1], colorMedium[2]));
   }
   else
   {
-    for (int i = 0; i < NUMPIXELS - 9; i++)
+    for (int i = NUMPIXELS - 7; i >= 0; i--)
       pixels.setPixelColor(i, pixels.Color(colorLow[0], colorLow[1], colorLow[2]));
   }
   pixels.show();
@@ -1077,24 +1253,24 @@ void RING_CO2()
 
 void RING_TEMP()
 {
-  if (tempValue > 27)
+  if (tempValue > 30)
   {
-    for (int i = 0; i < NUMPIXELS; i++)
+    for (int i = NUMPIXELS; i >= 0; i--)
       pixels.setPixelColor(i, pixels.Color(colorHigh[0], colorHigh[1], colorHigh[2]));
   }
-  else if (tempValue > 23)
+  else if (tempValue > 25)
   {
-    for (int i = 0; i < NUMPIXELS-3; i++)
+    for (int i = NUMPIXELS - 3; i >= 0; i--)
       pixels.setPixelColor(i, pixels.Color(colorLarge[0], colorLarge[1], colorLarge[2]));
   }
-  else if (tempValue > 20)
+  else if (tempValue > 15)
   {
-    for (int i = 0; i < NUMPIXELS-6; i++)
+    for (int i = NUMPIXELS - 2; i >= 0; i--)
       pixels.setPixelColor(i, pixels.Color(colorMedium[0], colorMedium[1], colorMedium[2]));
   }
   else
   {
-    for (int i = 0; i < NUMPIXELS-9; i++)
+    for (int i = NUMPIXELS - 7; i >= 0; i--)
       pixels.setPixelColor(i, pixels.Color(colorLow[0], colorLow[1], colorLow[2]));
   }
   pixels.show();
@@ -1102,30 +1278,30 @@ void RING_TEMP()
 
 void RING_HUM()
 {
-  if (humidityValue > 60)
+  if (humidityValue > 75)
   {
-    for (int i = 0; i < NUMPIXELS; i++)
+    for (int i = NUMPIXELS; i >= 0; i--)
       pixels.setPixelColor(i, pixels.Color(colorLow[0], colorLow[1], colorLow[2]));
   }
-  else if (humidityValue > 40)
+  else if (humidityValue > 50)
   {
-    for (int i = 0; i < NUMPIXELS-3; i++)
+    for (int i = NUMPIXELS - 3; i >= 0; i--)
       pixels.setPixelColor(i, pixels.Color(colorMedium[0], colorMedium[1], colorMedium[2]));
   }
-  else if (humidityValue > 30)
+  else if (humidityValue > 25)
   {
-    for (int i = 0; i < NUMPIXELS-6; i++)
+    for (int i = NUMPIXELS - 5; i >= 0; i--)
       pixels.setPixelColor(i, pixels.Color(colorLarge[0], colorLarge[1], colorLarge[2]));
   }
   else
   {
-    for (int i = 0; i < NUMPIXELS-9; i++)
+    for (int i = NUMPIXELS - 7; i >= 0; i--)
       pixels.setPixelColor(i, pixels.Color(colorHigh[0], colorHigh[1], colorHigh[2]));
   }
   pixels.show();
 }
 
-void RING_SOILHUM()
+/*void RING_SOILHUM()
 {
   if (soilHumidityValue > 60)
   {
@@ -1148,28 +1324,54 @@ void RING_SOILHUM()
       pixels.setPixelColor(i, pixels.Color(colorLow[0], colorLow[1], colorLow[2]));
   }
   pixels.show();
-}
+}*/
+// soilTemperatureValue
 
-void RING_SOILTEM()
+void RING_SOILTEM1()
 {
-  if (soilTemperatureValue > 800)
+  if (soilTemperatureValue > 30)
   {
-    for (int i = 0; i < 12; i++)
+    for (int i = NUMPIXELS; i >= 0; i--)
       pixels.setPixelColor(i, pixels.Color(colorHigh[0], colorHigh[1], colorHigh[2]));
   }
-  else if (soilTemperatureValue > 600)
+  else if (soilTemperatureValue > 25)
   {
-    for (int i = 0; i < 12; i++)
+    for (int i = NUMPIXELS - 3; i >= 0; i--)
       pixels.setPixelColor(i, pixels.Color(colorLarge[0], colorLarge[1], colorLarge[2]));
   }
-  else if (soilTemperatureValue > 400)
+  else if (soilTemperatureValue > 45)
   {
-    for (int i = 0; i < 12; i++)
+    for (int i = NUMPIXELS - 5; i >= 0; i--)
       pixels.setPixelColor(i, pixels.Color(colorMedium[0], colorMedium[1], colorMedium[2]));
   }
   else
   {
-    for (int i = 0; i < 12; i++)
+    for (int i = NUMPIXELS - 7; i >= 0; i--)
+      pixels.setPixelColor(i, pixels.Color(colorLow[0], colorLow[1], colorLow[2]));
+  }
+  pixels.show();
+}
+
+void RING_SOILTEM2()
+{
+  if (soilTemperatureValue2 > 30)
+  {
+    for (int i = NUMPIXELS; i >= 0; i--)
+      pixels.setPixelColor(i, pixels.Color(colorHigh[0], colorHigh[1], colorHigh[2]));
+  }
+  else if (soilTemperatureValue2 > 25)
+  {
+    for (int i = NUMPIXELS - 3; i >= 0; i--)
+      pixels.setPixelColor(i, pixels.Color(colorLarge[0], colorLarge[1], colorLarge[2]));
+  }
+  else if (soilTemperatureValue2 > 15)
+  {
+    for (int i = NUMPIXELS - 5; i >= 0; i--)
+      pixels.setPixelColor(i, pixels.Color(colorMedium[0], colorMedium[1], colorMedium[2]));
+  }
+  else
+  {
+    for (int i = NUMPIXELS - 7; i >= 0; i--)
       pixels.setPixelColor(i, pixels.Color(colorLow[0], colorLow[1], colorLow[2]));
   }
   pixels.show();
@@ -1177,6 +1379,7 @@ void RING_SOILTEM()
 
 void noInternetMsg()
 {
+  Serial.println("Conexion WIFI Fallida");
   display.clearDisplay();
   display.setCursor(0, 0);
   display.println("Internet Connection Failed ");
@@ -1185,6 +1388,39 @@ void noInternetMsg()
   display.setCursor(50, 48);
   display.println(WIFI_NAME);
   display.display();
+  for (int i = 0; i < 2; i++)
+  {
+    pixel.setPixelColor(0, pixel.Color(255, 0, 0));//RED
+    pixel.show();
+    delay(500);
+    pixel.clear();
+    delay(500);
+  }
+  display.clearDisplay();
+}
+
+void internetMsg()
+{
+  Serial.println("Conexion WIFI Correcta");
+  display.clearDisplay();
+  display.setCursor(0, 0);
+  display.println("Internet Connection");
+  display.setCursor(58, 16);
+  display.print("OK");
+  display.setCursor(0, 32);
+  display.println("Name of the Network");
+  display.setCursor(50, 48);
+  display.println(WIFI_NAME);
+  display.display();
+  for (int i = 0; i < 2; i++)
+  {
+    pixel.setPixelColor(0, pixel.Color(0, 255, 0));//GREEN
+    pixel.show();
+    delay(500);
+    pixel.clear();
+    delay(500);
+  }
+  display.clearDisplay();
 }
 
 void firstRead()
