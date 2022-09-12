@@ -33,6 +33,7 @@
 
 # Credentials files
 SW/V1_TeaSpike/include/credentials.h
+SW/V2_TeaSpike/include/credentials.h
 SW/V0/credentials.h
 
 #VSCode
