@@ -34,6 +34,7 @@
 # Credentials files
 SW/V1_TeaSpike/include/credentials.h
 SW/V2_TeaSpike/include/credentials.h
+SW/V3_TeaSpike/include/credentials.h
 SW/V0/credentials.h
 
 #VSCode
@@ -50,6 +51,13 @@ SW/V2_TeaSpike/.vscode/c_cpp_properties.json
 SW/V2_TeaSpike/.vscode/launch.json
 SW/V2_TeaSpike/.vscode/ipch
 SW/V2_TeaSpike/.vscode/extensions.json
+
+SW/V3_TeaSpike/.pio
+SW/V3_TeaSpike/.vscode/.browse.c_cpp.db*
+SW/V3_TeaSpike/.vscode/c_cpp_properties.json
+SW/V3_TeaSpike/.vscode/launch.json
+SW/V3_TeaSpike/.vscode/ipch
+SW/V3_TeaSpike/.vscode/extensions.json
 
 SW/V0/librerias.zip
 
